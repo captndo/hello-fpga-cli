@@ -54,3 +54,19 @@ def completion(code=0):
 
 
 HANDSHAKE = b"#hkrAF"
+
+
+POWER_REPLY = bytes.fromhex("04 50 07 80 58 5D 61")
+
+
+class FakeClock:
+    def __init__(self):
+        self.now = 0.0
+        self.sleeps = []
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.sleeps.append(seconds)
+        self.now += seconds

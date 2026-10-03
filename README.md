@@ -36,3 +36,18 @@ python -m unittest discover -s tests -v
 ```
 
 Tests use fake serial peers and deterministic clocks; no board is required.
+
+## Power telemetry
+
+```bash
+hello-fpga power
+hello-fpga power --watch --interval 0.5
+```
+
+The PAC1710 reply is seven positional bytes after the '*' echo. Power readings
+preserve signed current and use the stock 25 mOhm shunt, +/-80 mV range, and
+11-bit current configuration. The reply cannot verify those settings.
+Watch refreshes a timestamped terminal line or appends lines when redirected.
+It uses one connection and defaults to two seconds between request starts.
+The Python API provides execute_power and iter_power; explicitly close an
+iterator when stopping early. Power timeout defaults to one second.

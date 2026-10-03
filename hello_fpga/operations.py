@@ -1,9 +1,17 @@
 """Programming, power, FlashFreeze, and bridge lifetimes without a terminal."""
 
+import math
+import time
 from pathlib import Path
 from typing import Generator, Optional
 
 from .errors import DatFileError
+from .power import (
+    DEFAULT_POWER_INTERVAL,
+    DEFAULT_POWER_TIMEOUT,
+    PowerReading,
+    read_power,
+)
 from .protocol import DirectCHost, ProtocolObserver, RunResult
 from .transport import DEFAULT_TIMEOUT, SerialTransport
 
@@ -34,3 +42,41 @@ def execute_action(
         host = DirectCHost(transport, observer=observer)
         host.start_directc(action)
         return host.service(dat)
+
+
+def _validate_power_options(timeout: float, interval: float = DEFAULT_POWER_INTERVAL) -> None:
+    if not math.isfinite(timeout) or timeout < 1:
+        raise ValueError("power timeout must be finite and at least 1 second")
+    if not math.isfinite(interval) or interval <= 0:
+        raise ValueError("power interval must be finite and positive")
+
+
+def execute_power(
+    *, port: str, timeout: float = DEFAULT_POWER_TIMEOUT
+) -> PowerReading:
+    """Read one sample, closing the connection on success or failure."""
+    _validate_power_options(timeout)
+    with SerialTransport(port, timeout=timeout) as transport:
+        return read_power(transport)
+
+
+def iter_power(
+    *,
+    port: str,
+    timeout: float = DEFAULT_POWER_TIMEOUT,
+    interval: float = DEFAULT_POWER_INTERVAL,
+) -> Generator[PowerReading, None, None]:
+    """Yield samples using one connection, starting immediately.
+
+    The interval includes I/O and consumer time. Overruns do not accumulate
+    catch-up requests. Close the iterator when stopping early, for example
+    using contextlib.closing, to release its serial connection.
+    """
+    _validate_power_options(timeout, interval)
+    with SerialTransport(port, timeout=timeout) as transport:
+        while True:
+            started = time.monotonic()
+            yield read_power(transport)
+            remaining = interval - (time.monotonic() - started)
+            if remaining > 0:
+                time.sleep(remaining)

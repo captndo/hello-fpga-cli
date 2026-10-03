@@ -1,5 +1,9 @@
 """Typer commands and terminal presentation for Hello FPGA operations."""
 
+import math
+import sys
+from contextlib import closing
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -7,7 +11,8 @@ import serial
 import typer
 
 from .errors import DatFileError, ProtocolError
-from .operations import execute_action, load_dat
+from .operations import execute_action, execute_power, iter_power, load_dat
+from .power import DEFAULT_POWER_INTERVAL, DEFAULT_POWER_TIMEOUT
 from .protocol import ACTION_ERASE, ACTION_IDCODE, ACTION_INFO, ACTION_PROGRAM, ACTION_VERIFY
 from .transport import BAUD, DEFAULT_TIMEOUT
 
@@ -15,7 +20,7 @@ app = typer.Typer(
     name="hello-fpga",
     no_args_is_help=True,
     add_completion=False,
-    help="Native CLI for Hello FPGA DirectC programming.",
+    help="Native CLI for Hello FPGA DirectC programming and power.",
 )
 
 
@@ -94,6 +99,70 @@ def run_action(
         raise typer.Exit(result.exit_code if 1 <= result.exit_code <= 125 else 4)
 
     typer.secho("\nDirectC completed successfully.", fg=typer.colors.GREEN)
+
+
+def _positive_finite(value: float) -> float:
+    if not math.isfinite(value) or value <= 0:
+        raise typer.BadParameter("must be finite and positive")
+    return value
+
+
+def _watch_power(*, port: str, timeout: float, interval: float) -> None:
+    live = sys.stdout.isatty()
+    active_line = False
+    try:
+        with closing(iter_power(port=port, timeout=timeout, interval=interval)) as readings:
+            for reading in readings:
+                stamp = datetime.now().astimezone().isoformat(timespec="seconds")
+                line = (
+                    f"{stamp}  Vcore: {reading.voltage_v:.3f} V"
+                    f"  Icore: {reading.current_a * 1000:.1f} mA"
+                    f"  Pcore: {reading.power_w * 1000:.1f} mW"
+                )
+                if live:
+                    active_line = True
+                    typer.echo("\r\x1b[K" + line, nl=False, color=True)
+                else:
+                    typer.echo(line)
+    finally:
+        if active_line:
+            typer.echo()
+
+
+@app.command()
+def power(
+    port: str = typer.Option(
+        "/dev/ttyACM0", "--port", "-p", help="PIC32 serial device."
+    ),
+    timeout: float = typer.Option(
+        DEFAULT_POWER_TIMEOUT, "--timeout", min=1.0,
+        callback=_positive_finite, help="Power reply idle timeout in seconds."
+    ),
+    watch: bool = typer.Option(
+        False, "--watch", help="Continuously monitor with local timestamps."
+    ),
+    interval: float = typer.Option(
+        DEFAULT_POWER_INTERVAL, "--interval", callback=_positive_finite,
+        help="Seconds between request starts; used only with --watch."
+    ),
+) -> None:
+    """Read core-rail voltage, current, and power using stock board settings."""
+    try:
+        if watch:
+            _watch_power(port=port, timeout=timeout, interval=interval)
+        else:
+            reading = execute_power(port=port, timeout=timeout)
+            typer.echo(f"Core voltage: {reading.voltage_v:.3f} V")
+            typer.echo(f"Core current: {reading.current_a * 1000:.1f} mA")
+            typer.echo(f"Core power:   {reading.power_w * 1000:.1f} mW")
+    except serial.SerialException as exc:
+        typer.echo(f"Serial error: {exc}", err=True)
+        raise typer.Exit(2)
+    except ProtocolError as exc:
+        typer.echo(f"Protocol error: {exc}", err=True)
+        raise typer.Exit(3)
+    except KeyboardInterrupt:
+        raise typer.Exit(130)
 
 
 @app.command()
