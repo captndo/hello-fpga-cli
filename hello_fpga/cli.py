@@ -1,7 +1,9 @@
 """Typer commands and terminal presentation for Hello FPGA operations."""
 
 import math
+import os
 import sys
+import termios
 from contextlib import closing
 from datetime import datetime
 from pathlib import Path
@@ -10,9 +12,19 @@ from typing import Optional
 import serial
 import typer
 
+from .bridge import DEFAULT_BRIDGE_TIMEOUT
+from .bridge_console import console_fds, forward_streams, terminal_input
 from .errors import DatFileError, ProtocolError
 from .freeze import DEFAULT_FREEZE_TIMEOUT
-from .operations import execute_action, execute_freeze_enter, execute_freeze_exit, execute_power, iter_power, load_dat
+from .operations import (
+    execute_action,
+    execute_freeze_enter,
+    execute_freeze_exit,
+    execute_power,
+    iter_power,
+    load_dat,
+    open_bridge,
+)
 from .power import DEFAULT_POWER_INTERVAL, DEFAULT_POWER_TIMEOUT
 from .protocol import ACTION_ERASE, ACTION_IDCODE, ACTION_INFO, ACTION_PROGRAM, ACTION_VERIFY
 from .transport import BAUD, DEFAULT_TIMEOUT
@@ -21,7 +33,7 @@ app = typer.Typer(
     name="hello-fpga",
     no_args_is_help=True,
     add_completion=False,
-    help="Native CLI for Hello FPGA DirectC programming, power, and FlashFreeze.",
+    help="Native CLI for Hello FPGA programming, power, FlashFreeze, and UART bridging.",
 )
 freeze_app = typer.Typer(no_args_is_help=True, help="Enter or exit FlashFreeze.")
 app.add_typer(freeze_app, name="freeze")
@@ -116,6 +128,47 @@ def _log_tx(data: bytes) -> None:
 
 def _log_rx(data: bytes) -> None:
     typer.echo(f"RX: {data.hex(' ')}", err=True)
+
+
+@app.command()
+def bridge(
+    port: str = typer.Option(
+        "/dev/ttyACM0", "--port", "-p", help="PIC32 serial device."
+    ),
+    timeout: float = typer.Option(
+        DEFAULT_BRIDGE_TIMEOUT, "--timeout", min=1.0,
+        callback=_positive_finite,
+        help="Bridge entry idle timeout in seconds; active sessions remain open."
+    ),
+    verbose: bool = typer.Option(
+        False, "--verbose", "-v", help="Show TX/RX bytes on stderr."
+    ),
+) -> None:
+    """Forward stdin/stdout to the FPGA UART; keep receiving after EOF until Ctrl-C."""
+    try:
+        stdin_fd, stdout_fd = console_fds()
+        with open_bridge(
+            port=port, timeout=timeout, auto_exit=True,
+            on_tx=_log_tx if verbose else None,
+            on_rx=_log_rx if verbose else None,
+        ) as session:
+            if os.isatty(stdin_fd):
+                typer.echo("Bridge active. Ctrl-C to exit.", err=True)
+            with terminal_input(stdin_fd):
+                forward_streams(session, stdin_fd=stdin_fd, stdout_fd=stdout_fd)
+    except serial.SerialException as exc:
+        typer.echo(f"Serial error: {exc}", err=True)
+        raise typer.Exit(2)
+    except ProtocolError as exc:
+        typer.echo(f"Protocol error: {exc}", err=True)
+        raise typer.Exit(3)
+    except KeyboardInterrupt:
+        raise typer.Exit(130)
+    except BrokenPipeError:
+        raise typer.Exit(141)
+    except (OSError, termios.error) as exc:
+        typer.echo(f"Console I/O error: {exc}", err=True)
+        raise typer.Exit(1)
 
 
 def _run_freeze(*, enter: bool, port: str, timeout: float, verbose: bool) -> None:

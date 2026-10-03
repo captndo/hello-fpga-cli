@@ -87,3 +87,17 @@ records local session belief, not physical device-state discovery.
 SerialTransport.read_some and bridge.read return up to the requested size,
 using the serial 0.25-second timeout. Empty reads return b''; read_exact uses
 the configured idle timeout instead. The alternate '!' mode is unsupported.
+
+## Bridge console
+
+```bash
+hello-fpga bridge
+hello-fpga bridge --port /dev/ttyACM1 -v
+producer | hello-fpga bridge > response.bin
+```
+
+The console forwards stdin/stdout as binary streams. After stdin EOF, it keeps
+receiving until Ctrl-C. Terminal input is immediate, with local echo disabled;
+terminal settings are restored on exit. Stdout contains FPGA bytes only;
+guidance, errors, and verbose tracing go to stderr. Ctrl-C exits 130 and a
+closed stdout pipe exits 141, after canonical bridge cleanup.
