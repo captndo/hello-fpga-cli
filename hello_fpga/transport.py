@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from typing import Optional
+from typing import Callable, Optional
 
 import serial
 
@@ -11,19 +11,28 @@ from .errors import DeviceTimeout
 
 BAUD = 460800
 DEFAULT_TIMEOUT = 60.0
+TrafficCallback = Callable[[bytes], None]
 
 
 class SerialTransport:
-    """Own the serial connection and exact reads."""
+    """Own serial I/O with optional synchronous traffic callbacks.
+
+    TX is notified after write and flush succeed; RX after each nonempty read,
+    including partial replies. Callback exceptions propagate to the caller.
+    """
 
     def __init__(
         self,
         port: str,
         *,
         timeout: float = DEFAULT_TIMEOUT,
+        on_tx: Optional[TrafficCallback] = None,
+        on_rx: Optional[TrafficCallback] = None,
     ) -> None:
         self.port = port
         self.timeout = timeout
+        self.on_tx = on_tx
+        self.on_rx = on_rx
         self.ser: Optional[serial.Serial] = None
 
     def __enter__(self) -> "SerialTransport":
@@ -61,6 +70,8 @@ class SerialTransport:
                 # DirectC can legitimately go silent for >10 seconds. Each
                 # received chunk resets the idle deadline, not a total deadline.
                 deadline = time.monotonic() + self.timeout
+                if self.on_rx is not None:
+                    self.on_rx(chunk)
             elif time.monotonic() > deadline:
                 raise DeviceTimeout(
                     f"Timed out after {self.timeout:.0f}s waiting for "
@@ -72,3 +83,5 @@ class SerialTransport:
     def write(self, data: bytes) -> None:
         self.serial.write(data)
         self.serial.flush()
+        if self.on_tx is not None:
+            self.on_tx(data)

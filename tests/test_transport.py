@@ -44,6 +44,30 @@ class TransportTests(unittest.TestCase):
         transport.write(b"two")
         self.assertEqual(peer.events, [("write", b"one"), ("flush",), ("write", b"two"), ("flush",)])
 
+    def test_traffic_callbacks_follow_io_and_skip_empty_reads(self):
+        peer = FakeSerial(chunks=[b"a", b"", b"bc"])
+        traffic = []
+        def on_tx(data):
+            self.assertEqual(peer.events[-2:], [("write", data), ("flush",)])
+            traffic.append(("TX", data))
+        transport = SerialTransport("fake", on_tx=on_tx, on_rx=lambda data: traffic.append(("RX", data)))
+        transport.ser = peer
+        with patch("hello_fpga.transport.time.monotonic", return_value=0):
+            transport.write(b"command")
+            self.assertEqual(transport.read_exact(3, "data"), b"abc")
+        self.assertEqual(traffic, [("TX", b"command"), ("RX", b"a"), ("RX", b"bc")])
+
+    def test_failed_write_or_flush_does_not_notify_tx(self):
+        for method in ("write", "flush"):
+            peer = FakeSerial()
+            traffic = []
+            transport = SerialTransport("fake", on_tx=traffic.append)
+            transport.ser = peer
+            with patch.object(peer, method, side_effect=serial.SerialException("offline")):
+                with self.assertRaises(serial.SerialException):
+                    transport.write(b"command")
+            self.assertEqual(traffic, [])
+
     def test_uart_configuration_and_close(self):
         for fail in (False, True):
             with self.subTest(fail=fail):

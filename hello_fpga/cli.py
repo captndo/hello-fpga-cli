@@ -11,7 +11,8 @@ import serial
 import typer
 
 from .errors import DatFileError, ProtocolError
-from .operations import execute_action, execute_power, iter_power, load_dat
+from .freeze import DEFAULT_FREEZE_TIMEOUT
+from .operations import execute_action, execute_freeze_enter, execute_freeze_exit, execute_power, iter_power, load_dat
 from .power import DEFAULT_POWER_INTERVAL, DEFAULT_POWER_TIMEOUT
 from .protocol import ACTION_ERASE, ACTION_IDCODE, ACTION_INFO, ACTION_PROGRAM, ACTION_VERIFY
 from .transport import BAUD, DEFAULT_TIMEOUT
@@ -20,8 +21,10 @@ app = typer.Typer(
     name="hello-fpga",
     no_args_is_help=True,
     add_completion=False,
-    help="Native CLI for Hello FPGA DirectC programming and power.",
+    help="Native CLI for Hello FPGA DirectC programming, power, and FlashFreeze.",
 )
+freeze_app = typer.Typer(no_args_is_help=True, help="Enter or exit FlashFreeze.")
+app.add_typer(freeze_app, name="freeze")
 
 
 class TerminalObserver:
@@ -105,6 +108,72 @@ def _positive_finite(value: float) -> float:
     if not math.isfinite(value) or value <= 0:
         raise typer.BadParameter("must be finite and positive")
     return value
+
+
+def _log_tx(data: bytes) -> None:
+    typer.echo(f"TX: {data.hex(' ')}", err=True)
+
+
+def _log_rx(data: bytes) -> None:
+    typer.echo(f"RX: {data.hex(' ')}", err=True)
+
+
+def _run_freeze(*, enter: bool, port: str, timeout: float, verbose: bool) -> None:
+    try:
+        operation = execute_freeze_enter if enter else execute_freeze_exit
+        ticks = operation(
+            port=port,
+            timeout=timeout,
+            on_tx=_log_tx if verbose else None,
+            on_rx=_log_rx if verbose else None,
+        )
+        if enter:
+            typer.echo("FlashFreeze entered")
+        else:
+            typer.echo("FlashFreeze exited")
+            typer.echo(f"Wake-up time: {ticks} ticks")
+    except serial.SerialException as exc:
+        typer.echo(f"Serial error: {exc}", err=True)
+        raise typer.Exit(2)
+    except ProtocolError as exc:
+        typer.echo(f"Protocol error: {exc}", err=True)
+        raise typer.Exit(3)
+    except KeyboardInterrupt:
+        raise typer.Exit(130)
+
+
+@freeze_app.command("enter")
+def freeze_enter(
+    port: str = typer.Option(
+        "/dev/ttyACM0", "--port", "-p", help="PIC32 serial device."
+    ),
+    timeout: float = typer.Option(
+        DEFAULT_FREEZE_TIMEOUT, "--timeout", min=1.0,
+        callback=_positive_finite, help="FlashFreeze reply idle timeout in seconds."
+    ),
+    verbose: bool = typer.Option(
+        False, "--verbose", "-v", help="Show TX/RX bytes on stderr."
+    ),
+) -> None:
+    """Send the FlashFreeze enter command and check its echo."""
+    _run_freeze(enter=True, port=port, timeout=timeout, verbose=verbose)
+
+
+@freeze_app.command("exit")
+def freeze_exit(
+    port: str = typer.Option(
+        "/dev/ttyACM0", "--port", "-p", help="PIC32 serial device."
+    ),
+    timeout: float = typer.Option(
+        DEFAULT_FREEZE_TIMEOUT, "--timeout", min=1.0,
+        callback=_positive_finite, help="FlashFreeze reply idle timeout in seconds."
+    ),
+    verbose: bool = typer.Option(
+        False, "--verbose", "-v", help="Show TX/RX bytes on stderr."
+    ),
+) -> None:
+    """Send FlashFreeze exit and report raw wake-up ticks; timer scale is unknown."""
+    _run_freeze(enter=False, port=port, timeout=timeout, verbose=verbose)
 
 
 def _watch_power(*, port: str, timeout: float, interval: float) -> None:

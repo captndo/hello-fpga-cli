@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Generator, Optional
 
 from .errors import DatFileError
+from .freeze import DEFAULT_FREEZE_TIMEOUT, FlashFreezeController
 from .power import (
     DEFAULT_POWER_INTERVAL,
     DEFAULT_POWER_TIMEOUT,
@@ -13,7 +14,38 @@ from .power import (
     read_power,
 )
 from .protocol import DirectCHost, ProtocolObserver, RunResult
-from .transport import DEFAULT_TIMEOUT, SerialTransport
+from .transport import DEFAULT_TIMEOUT, SerialTransport, TrafficCallback
+
+
+def _validate_freeze_timeout(timeout: float) -> None:
+    if not math.isfinite(timeout) or timeout < 1:
+        raise ValueError("FlashFreeze timeout must be finite and at least 1 second")
+
+
+def execute_freeze_enter(
+    *,
+    port: str,
+    timeout: float = DEFAULT_FREEZE_TIMEOUT,
+    on_tx: Optional[TrafficCallback] = None,
+    on_rx: Optional[TrafficCallback] = None,
+) -> None:
+    """Enter FlashFreeze, closing the connection on success or failure."""
+    _validate_freeze_timeout(timeout)
+    with SerialTransport(port, timeout=timeout, on_tx=on_tx, on_rx=on_rx) as transport:
+        FlashFreezeController(transport).flashfreeze_enter()
+
+
+def execute_freeze_exit(
+    *,
+    port: str,
+    timeout: float = DEFAULT_FREEZE_TIMEOUT,
+    on_tx: Optional[TrafficCallback] = None,
+    on_rx: Optional[TrafficCallback] = None,
+) -> int:
+    """Exit FlashFreeze and return raw ticks, always closing the connection."""
+    _validate_freeze_timeout(timeout)
+    with SerialTransport(port, timeout=timeout, on_tx=on_tx, on_rx=on_rx) as transport:
+        return FlashFreezeController(transport).flashfreeze_exit()
 
 
 def load_dat(path: Path) -> bytes:

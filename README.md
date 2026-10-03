@@ -51,3 +51,16 @@ Watch refreshes a timestamped terminal line or appends lines when redirected.
 It uses one connection and defaults to two seconds between request starts.
 The Python API provides execute_power and iter_power; explicitly close an
 iterator when stopping early. Power timeout defaults to one second.
+
+## FlashFreeze
+
+```bash
+hello-fpga freeze enter
+hello-fpga freeze exit -v
+```
+
+Enter sends '$' and checks its echo. Exit sends '@', checks its echo, and reads
+an unsigned little-endian tick count; the time scale is unknown. Python callers
+use FlashFreezeController or execute_freeze_enter/execute_freeze_exit. Timeout
+defaults to two seconds. Optional transport TX/RX callbacks report traffic
+synchronously; verbose CLI tracing goes to stderr.

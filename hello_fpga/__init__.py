@@ -1,1 +1,1 @@
-"""Host support for Hello FPGA DirectC programming and power."""
+"""Host support for Hello FPGA programming, core-rail power, and FlashFreeze."""
