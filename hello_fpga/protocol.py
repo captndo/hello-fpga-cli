@@ -46,6 +46,8 @@ ACTION_IDCODE = b"2"
 ACTION_ERASE = b"3"
 ACTION_PROGRAM = b"4"
 ACTION_VERIFY = b"5"
+ACTION_AUTHENTICATE = b"6"
+ACTION_VERIFY_DIGEST = b"7"
 
 EXIT_CODE_RE = re.compile(r"Exit code\s*=\s*(-?\d+)")
 

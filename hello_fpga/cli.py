@@ -26,7 +26,15 @@ from .operations import (
     open_bridge,
 )
 from .power import DEFAULT_POWER_INTERVAL, DEFAULT_POWER_TIMEOUT
-from .protocol import ACTION_ERASE, ACTION_IDCODE, ACTION_INFO, ACTION_PROGRAM, ACTION_VERIFY
+from .protocol import (
+    ACTION_AUTHENTICATE,
+    ACTION_ERASE,
+    ACTION_IDCODE,
+    ACTION_INFO,
+    ACTION_PROGRAM,
+    ACTION_VERIFY,
+    ACTION_VERIFY_DIGEST,
+)
 from .transport import BAUD, DEFAULT_TIMEOUT
 
 app = typer.Typer(
@@ -410,6 +418,68 @@ def verify(
         dat_path=dat,
         action=ACTION_VERIFY,
         operation="verify",
+        timeout=timeout,
+        verbose=verbose,
+    )
+
+
+@app.command()
+def authenticate(
+    dat: Path = typer.Argument(
+        ...,
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        help="Libero .dat file containing encrypted programming data.",
+    ),
+    port: str = typer.Option(
+        "/dev/ttyACM0", "--port", "-p", help="PIC32 serial device."
+    ),
+    timeout: float = typer.Option(
+        DEFAULT_TIMEOUT, "--timeout", min=1.0, help="Idle timeout in seconds."
+    ),
+    verbose: bool = typer.Option(
+        False, "--verbose", "-v", help="Show DAT requests and protocol markers."
+    ),
+) -> None:
+    """Validate encrypted programming data using stock DirectC action 7."""
+    run_action(
+        port=port,
+        dat_path=dat,
+        action=ACTION_AUTHENTICATE,
+        operation="authenticate",
+        timeout=timeout,
+        verbose=verbose,
+    )
+
+
+@app.command()
+def digest(
+    dat: Path = typer.Argument(
+        ...,
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        help="Compatible Libero .dat file containing expected device data/digests.",
+    ),
+    port: str = typer.Option(
+        "/dev/ttyACM0", "--port", "-p", help="PIC32 serial device."
+    ),
+    timeout: float = typer.Option(
+        DEFAULT_TIMEOUT, "--timeout", min=1.0, help="Idle timeout in seconds."
+    ),
+    verbose: bool = typer.Option(
+        False, "--verbose", "-v", help="Show DAT requests and protocol markers."
+    ),
+) -> None:
+    """Verify programmed-device digests using stock DirectC action 28."""
+    run_action(
+        port=port,
+        dat_path=dat,
+        action=ACTION_VERIFY_DIGEST,
+        operation="digest",
         timeout=timeout,
         verbose=verbose,
     )

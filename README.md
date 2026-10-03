@@ -101,3 +101,17 @@ receiving until Ctrl-C. Terminal input is immediate, with local echo disabled;
 terminal settings are restored on exit. Stdout contains FPGA bytes only;
 guidance, errors, and verbose tracing go to stderr. Ctrl-C exits 130 and a
 closed stdout pipe exits 141, after canonical bridge cleanup.
+
+## Additional DirectC verification
+
+```bash
+hello-fpga authenticate secured.dat
+hello-fpga digest design.dat
+```
+
+Authentication uses host selector '6' (DirectC action 7) to validate encrypted
+programming data; ordinary unencrypted DAT files may not be applicable.
+Digest uses selector '7' (action 28) to verify programmed-device digests.
+Checked regions depend on DAT/device configuration. Both require DAT files,
+use the ordinary DirectC options and error handling, and need no confirmation.
+Python action constants are ACTION_AUTHENTICATE and ACTION_VERIFY_DIGEST.

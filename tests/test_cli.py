@@ -27,7 +27,7 @@ class CliTests(unittest.TestCase):
     def test_help_and_no_args(self):
         result = self.runner.invoke(app, ["--help"])
         self.assertEqual(result.exit_code, 0)
-        for name in ("info", "idcode", "program", "verify", "erase"):
+        for name in ("info", "idcode", "program", "verify", "erase", "authenticate", "digest"):
             self.assertIn(name, result.stdout)
             result_command = self.runner.invoke(app, [name, "--help"])
             self.assertEqual(result_command.exit_code, 0)
@@ -36,7 +36,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(self.runner.invoke(app, []).exit_code, 2)
 
     def test_commands_defaults_and_output(self):
-        for command, selector in [("info", b"1"), ("idcode", b"2"), ("erase", b"3"), ("program", b"4"), ("verify", b"5")]:
+        for command, selector in [("info", b"1"), ("idcode", b"2"), ("erase", b"3"), ("program", b"4"), ("verify", b"5"), ("authenticate", b"6"), ("digest", b"7")]:
             with self.subTest(command=command):
                 args = [command, str(self.dat)] + (["--yes"] if command == "erase" else [])
                 result, peer, factory = self.invoke(args)
@@ -65,7 +65,7 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(result.stderr, expected)
 
     def test_invalid_arguments_do_not_open_serial(self):
-        for command in ("info", "idcode", "program", "verify", "erase"):
+        for command in ("info", "idcode", "program", "verify", "erase", "authenticate", "digest"):
             for tail in ([], [str(self.dat.parent / "missing.dat")], [str(self.dat.parent)], [str(self.dat), "--timeout", "0.5"]):
                 with self.subTest(command=command, tail=tail):
                     result, _, factory = self.invoke([command] + tail)
@@ -74,7 +74,7 @@ class CliTests(unittest.TestCase):
 
     def test_empty_dat_before_preamble(self):
         self.dat.write_bytes(b"")
-        for command in ("info",):
+        for command in ("info", "authenticate", "digest"):
             with self.subTest(command=command):
                 result, _, factory = self.invoke([command, str(self.dat)])
                 self.assertEqual(result.exit_code, 2)
@@ -96,14 +96,14 @@ class CliTests(unittest.TestCase):
 
     def test_serial_error(self):
         with patch("serial.Serial", side_effect=serial.SerialException("offline")):
-            for command in ("info",):
+            for command in ("info", "authenticate", "digest"):
                 with self.subTest(command=command):
                     result = self.runner.invoke(app, [command, str(self.dat)])
                     self.assertEqual(result.exit_code, 2)
                     self.assertTrue(result.stderr.endswith("Serial error: offline\n"))
 
     def test_protocol_errors_close_serial(self):
-        for command in ("info",):
+        for command in ("info", "authenticate", "digest"):
             for stream in (b"?", b"R\x0a" + text_packet(b"End DirectC Demo")):
                 with self.subTest(command=command, stream=stream):
                     result, peer, _ = self.invoke([command, str(self.dat)], stream)
@@ -115,7 +115,7 @@ class CliTests(unittest.TestCase):
 
     def test_timeout_option_and_exit_code(self):
         # Six successful handshake reads precede the service-loop timeout.
-        for command in ("info",):
+        for command in ("info", "authenticate", "digest"):
             with self.subTest(command=command), patch("hello_fpga.transport.time.monotonic", side_effect=[0] * 13 + [13]):
                 result, peer, _ = self.invoke([command, str(self.dat), "--timeout", "12"], b"")
             self.assertEqual(result.exit_code, 3)
@@ -123,7 +123,7 @@ class CliTests(unittest.TestCase):
             self.assertTrue(peer.closed)
 
     def test_default_timeout(self):
-        for command in ("info",):
+        for command in ("info", "authenticate", "digest"):
             with self.subTest(command=command), patch("hello_fpga.transport.time.monotonic", side_effect=[0] * 13 + [61]):
                 result, peer, _ = self.invoke([command, str(self.dat)], b"")
             self.assertEqual(result.exit_code, 3)
@@ -131,7 +131,7 @@ class CliTests(unittest.TestCase):
             self.assertTrue(peer.closed)
 
     def test_serial_error_during_service_closes(self):
-        for command in ("info",):
+        for command in ("info", "authenticate", "digest"):
             with self.subTest(command=command):
                 peer = FakeSerial(HANDSHAKE)
                 original_read = peer.read
@@ -147,11 +147,35 @@ class CliTests(unittest.TestCase):
                 self.assertTrue(peer.closed)
 
     def test_directc_exit_mapping(self):
-        for command in ("info",):
+        for command in ("info", "authenticate", "digest"):
             for code, expected in [(1, 1), (125, 125), (-1, 4), (126, 4), (255, 4)]:
                 with self.subTest(command=command, code=code):
                     result, peer, _ = self.invoke([command, str(self.dat)], completion(code))
                     self.assertEqual(result.exit_code, expected)
                     self.assertIn(f"\nDirectC failed with exit code {code}.\n", result.stderr)
                     self.assertNotIn("completed successfully", result.stdout)
+                    self.assertTrue(peer.closed)
+
+    def test_new_actions_serve_dat_and_display_fragmented_status(self):
+        for command, selector, status in (
+            ("authenticate", b"6", b"Encrypted-data authentication: PASS\n"),
+            ("digest", b"7", b"FPGA Fabric digest verification: PASS\n"),
+        ):
+            for options in (["-p", "fake", "-v"], ["--port", "fake", "--verbose"]):
+                with self.subTest(command=command, options=options):
+                    stream = (
+                        dat_request(1, 2) + text_packet(status[:-4])
+                        + text_packet(status[-4:]) + b"R\x32T"
+                        + text_packet(b"Exit co") + text_packet(b"de = 0\nEnd Dire")
+                        + text_packet(b"ctC Demo\n")
+                    )
+                    with patch("typer.confirm", side_effect=AssertionError("no confirmation")):
+                        result, peer, factory = self.invoke([command, str(self.dat)] + options, stream)
+                    self.assertEqual(result.exit_code, 0, result.exception)
+                    self.assertEqual(peer.writes, [b"#", b"s", b"a", b"e", selector, b"5", b"\x02\0\0\0", b"bc"])
+                    self.assertEqual(factory.call_args.args[0], "fake")
+                    self.assertEqual(result.stdout, status.decode() + "Exit code = 0\nEnd DirectC Demo\n\nDirectC completed successfully.\n")
+                    self.assertIn(f"Operation: {command}\n", result.stderr)
+                    self.assertIn("[D] offset=0x00000001 requested=2 sent=2\n", result.stderr)
+                    self.assertIn("\rProgress:  50%\n[T] transition marker\n", result.stderr)
                     self.assertTrue(peer.closed)

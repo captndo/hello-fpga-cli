@@ -24,7 +24,7 @@ class ProtocolTests(unittest.TestCase):
             return host.service(dat)
 
     def test_all_action_handshakes(self):
-        for action in (b"1", b"2", b"3", b"4", b"5"):
+        for action in (b"1", b"2", b"3", b"4", b"5", b"6", b"7"):
             with self.subTest(action=action):
                 host, peer = self.host(HANDSHAKE)
                 host.start_directc(action)
