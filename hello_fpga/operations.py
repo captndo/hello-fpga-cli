@@ -2,9 +2,11 @@
 
 import math
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Generator, Optional
 
+from .bridge import DEFAULT_BRIDGE_TIMEOUT, HelloFpgaBridge
 from .errors import DatFileError
 from .freeze import DEFAULT_FREEZE_TIMEOUT, FlashFreezeController
 from .power import (
@@ -15,6 +17,42 @@ from .power import (
 )
 from .protocol import DirectCHost, ProtocolObserver, RunResult
 from .transport import DEFAULT_TIMEOUT, SerialTransport, TrafficCallback
+
+
+@contextmanager
+def open_bridge(
+    *,
+    port: str,
+    timeout: float = DEFAULT_BRIDGE_TIMEOUT,
+    on_tx: Optional[TrafficCallback] = None,
+    on_rx: Optional[TrafficCallback] = None,
+    auto_exit: bool = True,
+) -> Generator[HelloFpgaBridge, None, None]:
+    """Own one '&' bridge connection; optionally exit before closing.
+
+    Entry and exact reads use timeout (finite, at least one second). Stream
+    reads use the serial read timeout. Automatic exit is attempted on normal
+    completion, errors, and interruption, unless manually exited or already
+    attempted. With auto_exit=False, the caller must arrange device recovery.
+    The body exception is preserved if exit also fails, with failure chained.
+    """
+    if not math.isfinite(timeout) or timeout < 1:
+        raise ValueError("bridge timeout must be finite and at least 1 second")
+    with SerialTransport(port, timeout=timeout, on_tx=on_tx, on_rx=on_rx) as transport:
+        bridge = HelloFpgaBridge(transport)
+        bridge.enter()
+        try:
+            yield bridge
+        except BaseException as primary:
+            try:
+                if auto_exit:
+                    bridge._exit_if_active()
+            except BaseException as cleanup_error:
+                raise primary from cleanup_error
+            raise
+        else:
+            if auto_exit:
+                bridge._exit_if_active()
 
 
 def _validate_freeze_timeout(timeout: float) -> None:

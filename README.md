@@ -64,3 +64,26 @@ an unsigned little-endian tick count; the time scale is unknown. Python callers
 use FlashFreezeController or execute_freeze_enter/execute_freeze_exit. Timeout
 defaults to two seconds. Optional transport TX/RX callbacks report traffic
 synchronously; verbose CLI tracing goes to stderr.
+
+## FPGA UART bridge API
+
+```python
+from hello_fpga.operations import open_bridge
+
+with open_bridge(port='/dev/ttyACM0') as bridge:
+    bridge.write(b'h')
+    reply = bridge.read_exact(1, 'FPGA application handshake')
+```
+
+The example handshake belongs to the FPGA application. Entry sends '&' and
+requires its echo; bridge payload is forwarded unchanged. The host-to-FPGA
+pattern '%Ex' followed by any three bytes is reserved, even across writes.
+Canonical exit sends '%ExIt3' with no acknowledgement. The context manager
+automatically exits and closes on completion, errors, and interruption, with
+auto_exit=False available for explicit control. Failed exits are not retried;
+cleanup failures preserve a pending application exception. The active property
+records local session belief, not physical device-state discovery.
+
+SerialTransport.read_some and bridge.read return up to the requested size,
+using the serial 0.25-second timeout. Empty reads return b''; read_exact uses
+the configured idle timeout instead. The alternate '!' mode is unsupported.

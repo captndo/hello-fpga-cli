@@ -33,6 +33,69 @@ class TransportTests(unittest.TestCase):
     def test_zero_byte_read(self):
         self.assertEqual(self.make_transport(FakeSerial()).read_exact(0, "data"), b"")
 
+    def test_stream_read_is_bounded_and_notifies_nonempty_chunks_once(self):
+        peer = FakeSerial(chunks=[b"\x00\xffabc", b"", b"z"], fragment_size=100)
+        traffic = []
+        transport = self.make_transport(peer)
+        transport.on_rx = traffic.append
+        with patch.object(peer, "read", wraps=peer.read) as read, \
+             patch("hello_fpga.transport.time.monotonic", side_effect=AssertionError("no idle deadline")):
+            self.assertEqual(transport.read_some(2), b"\x00\xff")
+            self.assertEqual(transport.read_some(), b"abc")
+            self.assertEqual(transport.read_some(), b"")
+            self.assertEqual(transport.read_some(1), b"z")
+        self.assertEqual([call.args for call in read.call_args_list], [(2,), (4096,), (4096,), (1,)])
+        self.assertEqual(traffic, [b"\x00\xff", b"abc", b"z"])
+
+    def test_stream_read_rejects_invalid_size_before_io(self):
+        peer = FakeSerial()
+        with patch.object(peer, "read") as read:
+            for size in (0, -1, 1.5, "1", None, True, False):
+                with self.subTest(size=size), self.assertRaises(ValueError):
+                    self.make_transport(peer).read_some(size)
+            read.assert_not_called()
+
+    def test_stream_read_callback_failure_propagates(self):
+        peer = FakeSerial(b"x")
+        transport = self.make_transport(peer)
+        def fail(data):
+            raise RuntimeError("RX failed")
+        transport.on_rx = fail
+        with self.assertRaisesRegex(RuntimeError, "RX failed"):
+            transport.read_some()
+
+    def test_buffer_setup_failure_closes_connection(self):
+        for method in ("reset_input_buffer", "reset_output_buffer"):
+            peer = FakeSerial()
+            primary = serial.SerialException("setup failed")
+            with patch("serial.Serial", return_value=peer), \
+                 patch.object(peer, method, side_effect=primary):
+                with self.assertRaises(serial.SerialException) as error:
+                    with SerialTransport("fake"):
+                        self.fail("failed setup must not yield a transport")
+            self.assertIs(error.exception, primary)
+            self.assertTrue(peer.closed)
+
+    def test_close_failure_preserves_pending_exception(self):
+        peer = FakeSerial()
+        primary, cleanup = ValueError("body failed"), serial.SerialException("close failed")
+        with patch("serial.Serial", return_value=peer), \
+             patch.object(peer, "close", side_effect=cleanup) as close:
+            with self.assertRaises(ValueError) as error:
+                with SerialTransport("fake"):
+                    raise primary
+        close.assert_called_once()
+        self.assertIs(error.exception, primary)
+        self.assertIs(error.exception.__cause__, cleanup)
+
+    def test_close_failure_without_pending_exception_propagates(self):
+        peer = FakeSerial()
+        with patch("serial.Serial", return_value=peer), \
+             patch.object(peer, "close", side_effect=serial.SerialException("close failed")):
+            with self.assertRaisesRegex(serial.SerialException, "close failed"):
+                with SerialTransport("fake"):
+                    pass
+
     def test_unopened_transport_rejects_access(self):
         with self.assertRaisesRegex(RuntimeError, "serial port is not open"):
             SerialTransport("fake").serial

@@ -1,4 +1,4 @@
-"""Serial connection lifecycle and exact reads with an idle timeout."""
+"""Serial connection lifecycle, stream reads, and exact idle-timeout reads."""
 
 from __future__ import annotations
 
@@ -45,13 +45,22 @@ class SerialTransport:
             timeout=0.25,
             write_timeout=5,
         )
-        self.ser.reset_input_buffer()
-        self.ser.reset_output_buffer()
+        try:
+            self.ser.reset_input_buffer()
+            self.ser.reset_output_buffer()
+        except BaseException as exc:
+            self.__exit__(type(exc), exc, exc.__traceback__)
+            raise
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
         if self.ser is not None:
-            self.ser.close()
+            try:
+                self.ser.close()
+            except BaseException as close_error:
+                if exc is not None:
+                    raise exc.with_traceback(tb) from close_error
+                raise
 
     @property
     def serial(self) -> serial.Serial:
@@ -79,6 +88,19 @@ class SerialTransport:
                 )
 
         return bytes(data)
+
+    def read_some(self, max_bytes: int = 4096) -> bytes:
+        """Perform one bounded read, returning b'' on the serial read timeout.
+
+        Uses the serial port's 0.25-second timeout, not the exact-read idle
+        deadline. Partial data is returned unchanged and notified once.
+        """
+        if not isinstance(max_bytes, int) or isinstance(max_bytes, bool) or max_bytes <= 0:
+            raise ValueError("max_bytes must be a positive integer")
+        chunk = self.serial.read(max_bytes)
+        if chunk and self.on_rx is not None:
+            self.on_rx(chunk)
+        return chunk
 
     def write(self, data: bytes) -> None:
         self.serial.write(data)
